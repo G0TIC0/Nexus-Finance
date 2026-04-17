@@ -1,7 +1,7 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { User, Bell, Shield, Wallet, Camera, Key, Mail, Loader2 } from "lucide-react";
+import { User, Bell, Shield, Wallet, Camera, Key, Mail, Loader2, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
@@ -16,6 +16,28 @@ export default function Settings() {
   const [name, setName] = useState(user?.name || "");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Password change state
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwSuccess, setPwSuccess] = useState(false);
+
+  // Notifications state
+  const [notifications, setNotifications] = useState({
+    gastos: true,
+    relatorio: true,
+    ia: false,
+  });
+
+  useEffect(() => {
+    if (user?.preferences) {
+      const prefs = user.preferences as any;
+      if (prefs.notifications) {
+        setNotifications(prefs.notifications);
+      }
+    }
+  }, [user]);
+
   const handleAvatarClick = () => {
     fileInputRef.current?.click();
   };
@@ -24,25 +46,37 @@ export default function Settings() {
     const file = e.target.files?.[0];
     if (!file || !user) return;
 
+    // --- Block 1.4: Validation (CORRIGIDO) ---
+    const MAX_SIZE_MB = 2;
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+      alert(`A imagem deve ter no máximo ${MAX_SIZE_MB}MB.`);
+      e.target.value = "";
+      return;
+    }
+
+    const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      alert("Tipo de arquivo não permitido. Use JPG, PNG, GIF ou WebP.");
+      e.target.value = "";
+      return;
+    }
+
     try {
       setIsUploading(true);
       const fileExt = file.name.split('.').pop();
       const fileName = `${user.id}-${Math.random()}.${fileExt}`;
       const filePath = `avatars/${fileName}`;
 
-      // Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('avatars')
         .upload(filePath, file);
 
       if (uploadError) throw uploadError;
 
-      // Get public URL
       const { data: { publicUrl } } = supabase.storage
         .from('avatars')
         .getPublicUrl(filePath);
 
-      // Update user profile in backend
       await updateProfile({ avatarUrl: publicUrl });
     } catch (err: any) {
       console.error("Error uploading avatar:", err.message);
@@ -59,6 +93,46 @@ export default function Settings() {
       alert("Alterações salvas com sucesso!");
     } catch (err: any) {
       alert("Erro ao salvar alterações: " + err.message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleToggleNotification = async (key: keyof typeof notifications, value: boolean) => {
+    const newNotifications = { ...notifications, [key]: value };
+    setNotifications(newNotifications);
+    
+    try {
+      await fetch("/api/auth/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notifications: newNotifications }),
+      });
+    } catch (err) {
+      console.error("Failed to save preferences", err);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwError(null);
+    if (pwForm.next !== pwForm.confirm) { setPwError("As senhas não coincidem."); return; }
+    if (pwForm.next.length < 6) { setPwError("Nova senha deve ter pelo menos 6 caracteres."); return; }
+    
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setPwSuccess(true);
+      setPwForm({ current: "", next: "", confirm: "" });
+      setTimeout(() => { setIsChangingPassword(false); setPwSuccess(false); }, 2000);
+    } catch (err: any) {
+      setPwError(err.message);
     } finally {
       setIsSaving(false);
     }
@@ -100,7 +174,7 @@ export default function Settings() {
               </div>
               <div>
                 <h3 className="text-sm font-bold">Foto de Perfil</h3>
-                <p className="text-xs text-slate-500 mb-2">PNG, JPG ou GIF. Máximo de 2MB.</p>
+                <p className="text-xs text-slate-500 mb-2">PNG, JPG, GIF ou WebP. Máximo de 2MB.</p>
                 <button 
                   className="text-xs font-bold text-emerald-600 hover:text-emerald-700 disabled:text-slate-400"
                   onClick={handleAvatarClick}
@@ -169,16 +243,20 @@ export default function Settings() {
             <NotificationToggle 
               title="Alertas de Gastos" 
               description="Notificar quando atingir 80% do orçamento mensal." 
-              defaultChecked 
+              checked={notifications.gastos}
+              onChange={v => handleToggleNotification("gastos", v)}
             />
             <NotificationToggle 
               title="Relatório Semanal" 
               description="Receber resumo financeiro semanal por e-mail." 
-              defaultChecked 
+              checked={notifications.relatorio}
+              onChange={v => handleToggleNotification("relatorio", v)}
             />
             <NotificationToggle 
               title="Sugestões da IA" 
               description="Dicas personalizadas do Nexus baseadas no seu perfil." 
+              checked={notifications.ia}
+              onChange={v => handleToggleNotification("ia", v)}
             />
           </div>
         );
@@ -193,10 +271,17 @@ export default function Settings() {
                   </div>
                   <div>
                     <h3 className="text-sm font-bold">Senha</h3>
-                    <p className="text-xs text-slate-500">Última alteração há 3 meses.</p>
+                    <p className="text-xs text-slate-500">Altere sua senha de acesso periodicamente.</p>
                   </div>
                 </div>
-                <Button variant="ghost" size="sm" className="text-xs font-bold text-emerald-600">Alterar</Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-xs font-bold text-emerald-600"
+                  onClick={() => setIsChangingPassword(true)}
+                >
+                  Alterar
+                </Button>
               </div>
               
               <div className="flex items-center justify-between p-4 border border-stone-100 dark:border-slate-800 rounded-lg">
@@ -263,6 +348,85 @@ export default function Settings() {
           </Card>
         </div>
       </div>
+
+      {/* --- Block 2.5: Change Password Modal --- */}
+      {isChangingPassword && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm transition-all animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-stone-200 dark:border-slate-800 shadow-xl w-full max-w-md animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-stone-100 dark:border-slate-800">
+              <h2 className="text-base font-semibold">Alterar Senha</h2>
+              <button onClick={() => setIsChangingPassword(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <form onSubmit={handleChangePassword} className="p-6 space-y-4">
+              {pwError && <p className="text-rose-500 text-xs font-medium bg-rose-50 dark:bg-rose-900/20 p-2 rounded">{pwError}</p>}
+              {pwSuccess && <p className="text-emerald-500 text-xs font-medium bg-emerald-50 dark:bg-emerald-900/20 p-2 rounded">Senha alterada com sucesso!</p>}
+              
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-400">Senha Atual</label>
+                <div className="relative">
+                  <Key className="absolute left-3 top-2.5 w-4 h-4 text-slate-300" />
+                  <input 
+                    type="password" 
+                    className="w-full pl-10 pr-3 py-2 border border-stone-200 dark:border-slate-800 rounded text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-emerald-500" 
+                    value={pwForm.current} 
+                    onChange={e => setPwForm(f => ({ ...f, current: e.target.value }))} 
+                    required 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-400">Nova Senha</label>
+                <div className="relative">
+                  <Key className="absolute left-3 top-2.5 w-4 h-4 text-slate-300" />
+                  <input 
+                    type="password" 
+                    className="w-full pl-10 pr-3 py-2 border border-stone-200 dark:border-slate-800 rounded text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-emerald-500" 
+                    value={pwForm.next} 
+                    onChange={e => setPwForm(f => ({ ...f, next: e.target.value }))} 
+                    required 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-400">Confirmar Nova Senha</label>
+                <div className="relative">
+                  <Key className="absolute left-3 top-2.5 w-4 h-4 text-slate-300" />
+                  <input 
+                    type="password" 
+                    className="w-full pl-10 pr-3 py-2 border border-stone-200 dark:border-slate-800 rounded text-sm bg-transparent focus:outline-none focus:ring-1 focus:ring-emerald-500" 
+                    value={pwForm.confirm} 
+                    onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))} 
+                    required 
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setIsChangingPassword(false)} 
+                  className="flex-1 px-4 py-2 rounded border border-stone-200 dark:border-slate-800 text-sm font-medium hover:bg-stone-50 dark:hover:bg-slate-800 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isSaving || pwSuccess} 
+                  className="flex-1 px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold transition-colors disabled:opacity-60 flex items-center justify-center"
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                  {pwSuccess ? "Sucesso!" : "Salvar Senha"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
@@ -293,7 +457,11 @@ function SettingsTab({
   );
 }
 
-function NotificationToggle({ title, description, defaultChecked = false }: { title: string; description: string; defaultChecked?: boolean }) {
+function NotificationToggle({ 
+  title, description, checked, onChange 
+}: { 
+  title: string; description: string; checked: boolean; onChange: (v: boolean) => void;
+}) {
   return (
     <div className="flex items-center justify-between py-2">
       <div>
@@ -301,7 +469,12 @@ function NotificationToggle({ title, description, defaultChecked = false }: { ti
         <p className="text-xs text-slate-500">{description}</p>
       </div>
       <label className="relative inline-flex items-center cursor-pointer">
-        <input type="checkbox" defaultChecked={defaultChecked} className="sr-only peer" />
+        <input 
+          type="checkbox" 
+          checked={checked} 
+          onChange={e => onChange(e.target.checked)}
+          className="sr-only peer" 
+        />
         <div className="w-9 h-5 bg-stone-200 peer-focus:outline-none rounded-full peer dark:bg-slate-800 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
       </label>
     </div>

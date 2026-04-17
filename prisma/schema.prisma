@@ -21,6 +21,7 @@ model User {
   lastLoginAt    DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+  preferences    Json?
   
   // Relations
   transactions   Transaction[]
@@ -29,11 +30,12 @@ model User {
 }
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
-  tokenHash String
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
   email     String
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 model Category {

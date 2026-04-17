@@ -1,11 +1,11 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useNavigate, useLocation } from "react-router-dom";
 import { 
   LogOut, LayoutDashboard, 
-  Receipt, Target, BarChart3, Settings
+  Receipt, Target, BarChart3, Settings, Sparkles, Loader2
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -16,6 +16,20 @@ interface DashboardLayoutProps {
 export default function DashboardLayout({ children, title }: DashboardLayoutProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const runEngines = async () => {
+    setIsProcessing(true);
+    try {
+      await fetch("/api/engine/process-fixed-expenses", { method: "POST" });
+      await fetch("/api/engine/generate-forecast", { method: "POST" });
+      window.location.reload(); // Simple way to refresh data for now
+    } catch (err) {
+      console.error("Forecasting engine failed");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   return (
     <div className="flex min-h-screen bg-stone-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
@@ -34,6 +48,19 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
             <NavItem icon={<BarChart3 className="w-4 h-4" />} label="Previsões" to="/forecasts" />
             <NavItem icon={<Settings className="w-4 h-4" />} label="Configurações" to="/settings" />
           </ul>
+
+          {/* --- Block 2.3: Generate Forecasts Button --- */}
+          <div className="mt-8 px-2">
+            <Button 
+              size="sm" 
+              onClick={runEngines}
+              disabled={isProcessing}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-2"
+            >
+              {isProcessing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              Gera Previsões
+            </Button>
+          </div>
         </nav>
 
         <div className="pt-6 border-t border-stone-100 dark:border-slate-800">
@@ -94,8 +121,8 @@ function NavItem({ icon, label, to }: { icon: React.ReactNode; label: string; to
         aria-current={active ? "page" : undefined}
         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
           active 
-            ? "bg-stone-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100" 
-            : "text-slate-500 hover:bg-stone-50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-100"
+            ? "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100" 
+            : "text-slate-500 hover:bg-slate-100/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-100"
         }`}
       >
         {icon}
