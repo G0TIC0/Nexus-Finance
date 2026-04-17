@@ -1,0 +1,9 @@
+# Ignorar arquivos desnecessários na Vercel
+node_modules
+.env
+.env.example
+prisma/migrations
+.git
+.gemini
+README.md
+LICENSE

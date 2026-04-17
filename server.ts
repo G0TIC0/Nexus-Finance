@@ -49,9 +49,8 @@ function generateResetToken() {
   return { rawToken, tokenHash };
 }
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   // Trust proxy for express-rate-limit
   app.set("trust proxy", 1);
@@ -548,7 +547,14 @@ async function startServer() {
     app.get("*", (_req: Request, res: Response) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
+  return app;
 }
 
-startServer();
+// Inicialização local
+const isServerRunningDirectly = process.argv[1]?.includes('server');
+if (isServerRunningDirectly) {
+  createApp().then(app => {
+    const PORT = Number(process.env.PORT) || 3000;
+    app.listen(PORT, "0.0.0.0", () => console.log(`Server local rodando em http://localhost:${PORT}`));
+  });
+}
