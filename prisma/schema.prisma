@@ -1,0 +1,94 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// Represents a user in the system.
+model User {
+  id             String         @id @default(cuid())
+  name           String
+  email          String         @unique
+  hashedPassword String
+  avatarUrl      String?
+  lastLoginAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  
+  // Relations
+  transactions   Transaction[]
+  fixedExpenses  FixedExpense[]
+  forecasts      Forecast[]
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String
+  email     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  color     String
+  icon      String?
+  
+  transactions   Transaction[]
+  fixedExpenses  FixedExpense[]
+}
+
+model Transaction {
+  id             String   @id @default(cuid())
+  userId         String
+  description    String
+  amount         Float
+  type           String   // INCOME, EXPENSE, TRANSFER
+  status         String   @default("REALIZED") // REALIZED, PROJECTED
+  competenceDate DateTime
+  paymentDate    DateTime?
+  categoryId     String?
+  fixedExpenseId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category       Category?     @relation(fields: [categoryId], references: [id])
+  fixedExpense   FixedExpense? @relation(fields: [fixedExpenseId], references: [id])
+}
+
+model FixedExpense {
+  id            String   @id @default(cuid())
+  userId        String
+  description   String
+  amount         Float
+  autoProvision Boolean  @default(true)
+  active        Boolean  @default(true)
+  recurrence    String   // DAILY, WEEKLY, MONTHLY, ANNUAL
+  nextDueDate   DateTime
+  categoryId    String?
+  createdAt     DateTime @default(now())
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      Category?     @relation(fields: [categoryId], references: [id])
+  transactions  Transaction[]
+}
+
+model Forecast {
+  id               String   @id @default(cuid())
+  userId           String
+  monthsAhead      Int
+  projectedBalance String   // Store as JSON string
+  confidence       String   // LOW, MEDIUM, HIGH
+  createdAt        DateTime @default(now())
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
