@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
-import "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config({ override: true });
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { PrismaClient } from "@prisma/client";
@@ -10,6 +11,7 @@ import { z } from "zod";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import cors from "cors";
+import fs from "fs/promises";
 
 // --- Block 1.1: JWT Secret Validation ---
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -24,6 +26,9 @@ if (JWT_SECRET.length < 32) {
 
 // --- Block 2.1: PrismaClient Initialization ---
 const prisma = new PrismaClient({
+  datasources: {
+    db: { url: process.env.DATABASE_URL }
+  },
   log: process.env.NODE_ENV === "development" ? ["query", "warn", "error"] : ["error"],
 });
 
@@ -187,7 +192,9 @@ export async function createApp() {
       
       res.json({ user: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } });
     } catch (err: unknown) {
-      res.status(400).json({ error: "Erro no login" });
+      const message = err instanceof Error ? err.message : "Erro desconhecido";
+      await fs.appendFile("error.log", `Login error: ${message}\n`).catch(() => {});
+      res.status(500).json({ error: "Erro interno no servidor" });
     }
   });
 
@@ -535,6 +542,12 @@ export async function createApp() {
     } catch (err) {
       res.status(500).json({ error: "Erro ao buscar previsões" });
     }
+  });
+
+  // Global API Error Handler
+  app.use("/api", (err: any, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("API Error:", err);
+    res.status(500).json({ error: "Erro interno na API", details: err.message });
   });
 
   // Vite middleware for development

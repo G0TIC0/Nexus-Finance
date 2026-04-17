@@ -44,9 +44,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    setUser(data.user);
+    
+    // Check if response is JSON
+    const contentType = res.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erro desconhecido");
+      setUser(data.user);
+    } else {
+      const text = await res.text();
+      console.error("Non-JSON response:", text);
+      throw new Error("Erro no servidor: Resposta inválida");
+    }
   };
 
   const register = async (name: string, email: string, password: string) => {
