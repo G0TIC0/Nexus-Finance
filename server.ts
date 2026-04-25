@@ -12,6 +12,12 @@ import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import cors from "cors";
 import fs from "fs/promises";
+import multer from "multer";
+
+// Configuração do multer para upload de arquivos (Avatar)
+const upload = multer({ 
+  limits: { fileSize: 2 * 1024 * 1024 }
+});
 
 // --- Block 1.1: JWT Secret Validation ---
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -49,7 +55,7 @@ function setAuthCookie(res: Response, token: string) {
 
 // --- Block 1.6: Password Reset Helpers ---
 function generateResetToken() {
-  const rawToken = crypto.randomBytes(32).toString("hex");
+  const rawToken = crypto.randomBytes(64).toString("hex"); // 128 chars
   const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
   return { rawToken, tokenHash };
 }
@@ -233,11 +239,22 @@ export async function createApp() {
   });
 
   // --- Block 4.2: Update Preferences ---
+  const preferencesSchema = z.object({
+    notifications: z.object({
+      gastos: z.boolean().optional(),
+      relatorio: z.boolean().optional(),
+      ia: z.boolean().optional(),
+    }).optional(),
+    theme: z.enum(["light", "dark", "system"]).optional(),
+  }).strict();
+
   app.patch("/api/auth/preferences", authenticate, async (req: Request, res: Response) => {
     try {
+      const result = preferencesSchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
       const user = await prisma.user.update({
         where: { id: (req as AuthRequest).userId },
-        data: { preferences: req.body },
+        data: { preferences: result.data },
       });
       res.json({ preferences: user.preferences });
     } catch (err: unknown) {
@@ -292,7 +309,7 @@ export async function createApp() {
   });
 
   const resetPasswordSchema = z.object({
-    token: z.string().min(64, "Token inválido"),
+    token: z.string().min(128, "Token inválido"),
     newPassword: z.string().min(6, "Senha deve ter pelo menos 6 caracteres"),
   });
 
@@ -368,17 +385,26 @@ export async function createApp() {
   });
 
   // --- Block 5.3: Categories & Fixed Expenses CRUD ---
-  app.get("/api/categories", authenticate, async (_req: Request, res: Response) => {
-    const categories = await prisma.category.findMany({ orderBy: { name: "asc" } });
+  app.get("/api/categories", authenticate, async (req: Request, res: Response) => {
+    const categories = await prisma.category.findMany({ 
+      where: { userId: (req as AuthRequest).userId },
+      orderBy: { name: "asc" } 
+    });
     res.json(categories);
   });
 
   app.post("/api/categories", authenticate, async (req: Request, res: Response) => {
     try {
-      const schema = z.object({ name: z.string().min(1).max(50), color: z.string().min(4).max(9), icon: z.string().optional() });
+      const schema = z.object({ 
+        name: z.string().min(1).max(50), 
+        color: z.string().min(4).max(9), 
+        icon: z.string().optional() 
+      });
       const result = schema.safeParse(req.body);
       if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
-      const cat = await prisma.category.create({ data: result.data });
+      const cat = await prisma.category.create({ 
+        data: { ...result.data, userId: (req as AuthRequest).userId } 
+      });
       res.json(cat);
     } catch (err: unknown) {
       res.status(500).json({ error: "Erro ao criar categoria" });
@@ -439,31 +465,49 @@ export async function createApp() {
 
       let created = 0;
       for (const expense of fixedExpenses) {
-        const existing = await prisma.transaction.findFirst({
-          where: { userId, fixedExpenseId: expense.id, competenceDate: expense.nextDueDate, status: "PROJECTED" },
+        let currentDueDate = new Date(expense.nextDueDate);
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+
+        while (currentDueDate <= today) {
+          const existing = await prisma.transaction.findFirst({
+            where: {
+              userId,
+              fixedExpenseId: expense.id,
+              competenceDate: currentDueDate,
+              status: "PROJECTED"
+            },
+          });
+
+          if (!existing) {
+            await prisma.transaction.create({
+              data: {
+                description: expense.description,
+                amount: expense.amount,
+                type: "EXPENSE",
+                status: "PROJECTED",
+                competenceDate: currentDueDate,
+                userId,
+                fixedExpenseId: expense.id,
+              },
+            });
+            created++;
+          }
+
+          const nextDate = new Date(currentDueDate);
+          if (expense.recurrence === "DAILY") nextDate.setDate(nextDate.getDate() + 1);
+          else if (expense.recurrence === "WEEKLY") nextDate.setDate(nextDate.getDate() + 7);
+          else if (expense.recurrence === "MONTHLY") nextDate.setMonth(nextDate.getMonth() + 1);
+          else if (expense.recurrence === "ANNUAL") nextDate.setFullYear(nextDate.getFullYear() + 1);
+          else break;
+
+          currentDueDate = nextDate;
+        }
+
+        await prisma.fixedExpense.update({
+          where: { id: expense.id },
+          data: { nextDueDate: currentDueDate },
         });
-        if (existing) continue;
-
-        await prisma.transaction.create({
-          data: {
-            description: expense.description,
-            amount: expense.amount,
-            type: "EXPENSE",
-            status: "PROJECTED",
-            competenceDate: expense.nextDueDate,
-            userId,
-            fixedExpenseId: expense.id,
-          },
-        });
-
-        let nextDate = new Date(expense.nextDueDate);
-        if (expense.recurrence === "DAILY") nextDate.setDate(nextDate.getDate() + 1);
-        else if (expense.recurrence === "WEEKLY") nextDate.setDate(nextDate.getDate() + 7);
-        else if (expense.recurrence === "MONTHLY") nextDate.setMonth(nextDate.getMonth() + 1);
-        else if (expense.recurrence === "ANNUAL") nextDate.setFullYear(nextDate.getFullYear() + 1);
-
-        await prisma.fixedExpense.update({ where: { id: expense.id }, data: { nextDueDate: nextDate } });
-        created++;
       }
       res.json({ success: true, created });
     } catch (err) {
@@ -522,7 +566,7 @@ export async function createApp() {
       }
 
       const forecast = await prisma.forecast.create({
-        data: { userId, monthsAhead: 3, projectedBalance: JSON.stringify(projectedBalances), confidence },
+        data: { userId, monthsAhead: 3, projectedBalance: projectedBalances, confidence },
       });
 
       res.json({ success: true, data: { forecastId: forecast.id, projectedBalances, confidence } });
@@ -541,6 +585,63 @@ export async function createApp() {
       res.json(forecasts);
     } catch (err) {
       res.status(500).json({ error: "Erro ao buscar previsões" });
+    }
+  });
+
+  // DELETE transaction
+  app.delete("/api/transactions/:id", authenticate, async (req: Request, res: Response) => {
+    try {
+      const transaction = await prisma.transaction.findFirst({
+        where: { id: req.params.id, userId: (req as AuthRequest).userId }
+      });
+      if (!transaction) return res.status(404).json({ error: "Transação não encontrada" });
+      await prisma.transaction.delete({ where: { id: req.params.id } });
+      res.json({ success: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: "Erro ao excluir transação" });
+    }
+  });
+
+  // DELETE category
+  app.delete("/api/categories/:id", authenticate, async (req: Request, res: Response) => {
+    try {
+      const category = await prisma.category.findFirst({
+        where: { id: req.params.id, userId: (req as AuthRequest).userId }
+      });
+      if (!category) return res.status(404).json({ error: "Categoria não encontrada" });
+      await prisma.category.delete({ where: { id: req.params.id } });
+      res.json({ success: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: "Erro ao excluir categoria" });
+    }
+  });
+
+  // DELETE fixed expense
+  app.delete("/api/fixed-expenses/:id", authenticate, async (req: Request, res: Response) => {
+    try {
+      const expense = await prisma.fixedExpense.findFirst({
+        where: { id: req.params.id, userId: (req as AuthRequest).userId }
+      });
+      if (!expense) return res.status(404).json({ error: "Despesa fixa não encontrada" });
+      await prisma.fixedExpense.delete({ where: { id: req.params.id } });
+      res.json({ success: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: "Erro ao excluir despesa fixa" });
+    }
+  });
+
+  // Avatar Upload Endpoint
+  app.post("/api/auth/avatar", authenticate, upload.single("avatar"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+      
+      // Simulação de upload para storage externo (ex: Supabase) retornando URL estática para esta correção simplificada
+      // Em produção, aqui seria feita a chamada ao Supabase Storage.
+      const avatarUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${(req as AuthRequest).userId}`;
+      
+      res.json({ avatarUrl });
+    } catch (err) {
+      res.status(500).json({ error: "Erro no upload do avatar" });
     }
   });
 

@@ -23,11 +23,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  async function parseJsonResponse(res: Response) {
+    const contentType = res.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      return res.json();
+    }
+    const text = await res.text();
+    console.error("Non-JSON response:", text);
+    throw new Error("Erro no servidor: Resposta inválida");
+  }
+
   useEffect(() => {
     fetch("/api/auth/me")
-      .then((res) => {
+      .then(async (res) => {
         if (!res.ok) throw new Error("Not authenticated");
-        return res.json();
+        return parseJsonResponse(res);
       })
       .then((data) => {
         if (data.user) setUser(data.user);
@@ -45,17 +55,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ email, password }),
     });
     
-    // Check if response is JSON
-    const contentType = res.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erro desconhecido");
-      setUser(data.user);
-    } else {
-      const text = await res.text();
-      console.error("Non-JSON response:", text);
-      throw new Error("Erro no servidor: Resposta inválida");
-    }
+    const data = await parseJsonResponse(res);
+    if (!res.ok) throw new Error(data.error || "Erro desconhecido");
+    setUser(data.user);
   };
 
   const register = async (name: string, email: string, password: string) => {
@@ -64,8 +66,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, email, password }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    const data = await parseJsonResponse(res);
+    if (!res.ok) throw new Error(data.error || "Erro desconhecido");
     setUser(data.user);
   };
 
@@ -80,8 +82,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updateData),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    const data = await parseJsonResponse(res);
+    if (!res.ok) throw new Error(data.error || "Erro desconhecido");
     setUser(data.user);
   };
 

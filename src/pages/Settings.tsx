@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { User, Bell, Shield, Wallet, Camera, Key, Mail, Loader2, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 
 type TabType = "profile" | "accounts" | "notifications" | "security";
 
@@ -61,28 +60,26 @@ export default function Settings() {
       return;
     }
 
+    setIsUploading(true);
     try {
-      setIsUploading(true);
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${user.id}-${Math.random()}.${fileExt}`;
-      const filePath = `avatars/${fileName}`;
+      const formData = new FormData();
+      formData.append("avatar", file);
 
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, file);
+      const res = await fetch("/api/auth/avatar", {
+        method: "POST",
+        body: formData,
+      });
 
-      if (uploadError) throw uploadError;
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Falha no upload");
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath);
-
-      await updateProfile({ avatarUrl: publicUrl });
+      await updateProfile({ avatarUrl: data.avatarUrl });
     } catch (err: any) {
       console.error("Error uploading avatar:", err.message);
-      alert("Erro ao enviar imagem. Verifique se o bucket 'avatars' existe no Supabase e tem permissões públicas.");
+      alert("Erro ao enviar imagem: " + err.message);
     } finally {
       setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 

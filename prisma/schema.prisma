@@ -25,6 +25,7 @@ model User {
   preferences    Json?
   
   // Relations
+  categories     Category[]
   transactions   Transaction[]
   fixedExpenses  FixedExpense[]
   forecasts      Forecast[]
@@ -44,9 +45,29 @@ model Category {
   name      String
   color     String
   icon      String?
+  userId    String
   
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions   Transaction[]
   fixedExpenses  FixedExpense[]
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+enum TransactionStatus {
+  REALIZED
+  PROJECTED
+}
+
+enum RecurrenceType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  ANNUAL
 }
 
 model Transaction {
@@ -54,8 +75,8 @@ model Transaction {
   userId         String
   description    String
   amount         Float
-  type           String   // INCOME, EXPENSE, TRANSFER
-  status         String   @default("REALIZED") // REALIZED, PROJECTED
+  type           TransactionType
+  status         TransactionStatus  @default(REALIZED)
   competenceDate DateTime
   paymentDate    DateTime?
   categoryId     String?
@@ -75,7 +96,7 @@ model FixedExpense {
   amount         Float
   autoProvision Boolean  @default(true)
   active        Boolean  @default(true)
-  recurrence    String   // DAILY, WEEKLY, MONTHLY, ANNUAL
+  recurrence    RecurrenceType
   nextDueDate   DateTime
   categoryId    String?
   createdAt     DateTime @default(now())
@@ -89,7 +110,7 @@ model Forecast {
   id               String   @id @default(cuid())
   userId           String
   monthsAhead      Int
-  projectedBalance String   // Store as JSON string
+  projectedBalance Json
   confidence       String   // LOW, MEDIUM, HIGH
   createdAt        DateTime @default(now())
 
