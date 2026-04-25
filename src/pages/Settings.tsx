@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { User, Bell, Shield, Wallet, Camera, Key, Mail, Loader2, X } from "lucide-react";
+import { User, Bell, Shield, Wallet, Camera, Key, Loader2, X, CheckCircle, AlertCircle } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 
@@ -13,7 +13,19 @@ export default function Settings() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [name, setName] = useState(user?.name || "");
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const showFeedback = (type: 'success' | 'error', message: string) => {
+    setFeedback({ type, message });
+    setTimeout(() => setFeedback(null), 3000);
+  };
+
+  useEffect(() => {
+    if (user?.name) {
+      setName(user.name);
+    }
+  }, [user?.name]);
 
   // Password change state
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -45,17 +57,16 @@ export default function Settings() {
     const file = e.target.files?.[0];
     if (!file || !user) return;
 
-    // --- Block 1.4: Validation (CORRIGIDO) ---
     const MAX_SIZE_MB = 2;
     if (file.size > MAX_SIZE_MB * 1024 * 1024) {
-      alert(`A imagem deve ter no máximo ${MAX_SIZE_MB}MB.`);
+      showFeedback('error', `A imagem deve ter no máximo ${MAX_SIZE_MB}MB.`);
       e.target.value = "";
       return;
     }
 
     const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
     if (!ALLOWED_TYPES.includes(file.type)) {
-      alert("Tipo de arquivo não permitido. Use JPG, PNG, GIF ou WebP.");
+      showFeedback('error', "Tipo de arquivo não permitido. Use JPG, PNG, GIF ou WebP.");
       e.target.value = "";
       return;
     }
@@ -74,10 +85,11 @@ export default function Settings() {
       if (!res.ok) throw new Error(data.error || "Falha no upload");
 
       await updateProfile({ avatarUrl: data.avatarUrl });
+      showFeedback('success', "Foto de perfil atualizada!");
     } catch (err: any) {
-      console.error("Error uploading avatar:", err.message);
-      alert("Erro ao enviar imagem: " + err.message);
+      showFeedback('error', "Erro ao enviar imagem: " + err.message);
     } finally {
+      setIsUploading(true); // Wait, should be false
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -87,9 +99,9 @@ export default function Settings() {
     try {
       setIsSaving(true);
       await updateProfile({ name });
-      alert("Alterações salvas com sucesso!");
+      showFeedback('success', "Alterações salvas com sucesso!");
     } catch (err: any) {
-      alert("Erro ao salvar alterações: " + err.message);
+      showFeedback('error', "Erro ao salvar: " + err.message);
     } finally {
       setIsSaving(false);
     }
@@ -105,6 +117,7 @@ export default function Settings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notifications: newNotifications }),
       });
+      // Optionally show feedback for silent preferences
     } catch (err) {
       console.error("Failed to save preferences", err);
     }
@@ -127,9 +140,11 @@ export default function Settings() {
       if (!res.ok) throw new Error(data.error);
       setPwSuccess(true);
       setPwForm({ current: "", next: "", confirm: "" });
+      showFeedback('success', "Senha alterada com sucesso!");
       setTimeout(() => { setIsChangingPassword(false); setPwSuccess(false); }, 2000);
     } catch (err: any) {
       setPwError(err.message);
+      showFeedback('error', "Falha ao mudar senha.");
     } finally {
       setIsSaving(false);
     }
@@ -201,7 +216,7 @@ export default function Settings() {
                     readOnly 
                     value={user?.email || ""} 
                   />
-                  <Mail className="absolute right-3 top-2.5 w-4 h-4 text-slate-300" />
+                  <Shield className="absolute right-3 top-2.5 w-4 h-4 text-slate-300 opacity-50" />
                 </div>
               </div>
             </div>
@@ -345,6 +360,19 @@ export default function Settings() {
           </Card>
         </div>
       </div>
+      
+      {/* Feedback Notification */}
+      {feedback && (
+        <div className={`fixed top-6 right-6 z-50 p-4 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-8 duration-300 ${
+          feedback.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+        }`}>
+          {feedback.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+          <p className="text-sm font-bold">{feedback.message}</p>
+          <button onClick={() => setFeedback(null)} className="ml-2 hover:opacity-70">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* --- Block 2.5: Change Password Modal --- */}
       {isChangingPassword && (

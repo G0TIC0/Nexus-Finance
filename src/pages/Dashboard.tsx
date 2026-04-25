@@ -37,6 +37,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
+    const handleEnginesComplete = () => fetchData();
+    window.addEventListener("nexus:engines-complete", handleEnginesComplete);
+    return () => window.removeEventListener("nexus:engines-complete", handleEnginesComplete);
   }, []);
 
   const fetchData = async () => {
@@ -83,17 +86,29 @@ export default function Dashboard() {
 
   // KPI Calculations
   const safeTransactions = Array.isArray(transactions) ? transactions : [];
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
 
-  // --- Block 3.1: Consolidado (CORRIGIDO) ---
   const realizedIncome = safeTransactions
-    .filter(t => t.type === "INCOME" && t.status === "REALIZED")
+    .filter(t => {
+      const d = new Date(t.competenceDate);
+      return t.type === "INCOME" && t.status === "REALIZED" &&
+        d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    })
     .reduce((acc, t) => acc + Number(t.amount), 0);
   
   const realizedExpense = safeTransactions
-    .filter(t => t.type === "EXPENSE" && t.status === "REALIZED")
+    .filter(t => {
+      const d = new Date(t.competenceDate);
+      return t.type === "EXPENSE" && t.status === "REALIZED" &&
+        d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    })
     .reduce((acc, t) => acc + Number(t.amount), 0);
 
-  const currentBalance = realizedIncome - realizedExpense;
+  const currentBalance = safeTransactions
+    .filter(t => t.status === "REALIZED")
+    .reduce((acc, t) => acc + (t.type === "INCOME" ? Number(t.amount) : -Number(t.amount)), 0);
   
   const projectedTotal = safeTransactions
     .filter(t => t.status === "PROJECTED")

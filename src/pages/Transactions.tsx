@@ -3,7 +3,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Receipt, Plus, Search, Filter, X, Loader2 } from "lucide-react";
+import { Receipt, Plus, Search, Filter, X, Loader2, Trash2 } from "lucide-react";
 
 interface Category {
   id: string;
@@ -37,6 +37,11 @@ export default function Transactions() {
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
 
+  // Filters State
+  const [filterType, setFilterType] = useState<string | null>(null);
+  const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -67,6 +72,17 @@ export default function Transactions() {
     }
   };
 
+  const handleDelete = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir esta transação?")) return;
+    try {
+      const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Erro ao excluir");
+      fetchData(page);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const fetchCategories = async () => {
     try {
       const res = await fetch("/api/categories");
@@ -84,19 +100,46 @@ export default function Transactions() {
 
   useEffect(() => {
     fetchData(page);
-    fetchCategories();
   }, [page]);
 
+  useEffect(() => {
+    fetchCategories();
+  }, []);
+
   const filteredTransactions = useMemo(() => {
-    if (!searchTerm) return data;
-    return data.filter(t => 
-      t.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.category?.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [data, searchTerm]);
+    let result = data;
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(t => 
+        t.description.toLowerCase().includes(term) ||
+        t.category?.name.toLowerCase().includes(term)
+      );
+    }
+    if (filterType) {
+      result = result.filter(t => t.type === filterType);
+    }
+    if (filterStatus) {
+      result = result.filter(t => t.status === filterStatus);
+    }
+    return result;
+  }, [data, searchTerm, filterType, filterStatus]);
+
+  const activeFiltersCount = (filterType ? 1 : 0) + (filterStatus ? 1 : 0);
+
+  const clearFilters = () => {
+    setFilterType(null);
+    setFilterStatus(null);
+    setSearchTerm("");
+  };
 
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (formData.amount <= 0) {
+      setError("O valor deve ser maior que zero");
+      return;
+    }
+
     setIsSaving(true);
     setError(null);
     try {
@@ -143,10 +186,63 @@ export default function Transactions() {
             />
           </div>
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            <Button variant="outline" size="sm" className="flex-1 sm:flex-none items-center gap-2 border-stone-200 dark:border-slate-800">
-              <Filter className="w-4 h-4" />
-              Filtrar
-            </Button>
+            <div className="relative group">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className={`flex-1 sm:flex-none items-center gap-2 border-stone-200 dark:border-slate-800 ${activeFiltersCount > 0 ? "border-emerald-500 bg-emerald-50/50" : ""}`}
+                onClick={() => setShowFilters(!showFilters)}
+              >
+                <Filter className="w-4 h-4" />
+                {activeFiltersCount > 0 ? `Filtros (${activeFiltersCount})` : "Filtrar"}
+              </Button>
+              
+              {showFilters && (
+                <div className="absolute top-full right-0 mt-2 w-64 bg-white dark:bg-slate-900 border border-stone-200 dark:border-slate-800 rounded-xl shadow-xl z-50 p-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm font-bold uppercase text-slate-400">Filtros</span>
+                    <button onClick={clearFilters} className="text-[10px] uppercase font-bold text-emerald-600 hover:text-emerald-700">Limpar</button>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold uppercase text-slate-400">Tipo</label>
+                      <div className="flex flex-wrap gap-2">
+                        {["INCOME", "EXPENSE", "TRANSFER"].map(t => (
+                          <button 
+                            key={t}
+                            onClick={() => setFilterType(filterType === t ? null : t)}
+                            className={`px-2 py-1 rounded text-[10px] font-bold uppercase transition-colors ${
+                              filterType === t ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                            }`}
+                          >
+                            {t === "INCOME" ? "Receita" : t === "EXPENSE" ? "Despesa" : "Transf."}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold uppercase text-slate-400">Status</label>
+                      <div className="flex flex-wrap gap-2">
+                        {["REALIZED", "PROJECTED"].map(s => (
+                          <button 
+                            key={s}
+                            onClick={() => setFilterStatus(filterStatus === s ? null : s)}
+                            className={`px-2 py-1 rounded text-[10px] font-bold uppercase transition-colors ${
+                              filterStatus === s ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                            }`}
+                          >
+                            {s === "REALIZED" ? "Realizado" : "Projetado"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            
             <Button 
               size="sm" 
               className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 font-bold"
@@ -158,6 +254,26 @@ export default function Transactions() {
           </div>
         </div>
 
+        {activeFiltersCount > 0 && (
+          <div className="flex items-center gap-2">
+             <span className="text-xs text-slate-400">Filtros ativos:</span>
+             <div className="flex flex-wrap gap-2">
+               {filterType && (
+                 <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase flex items-center gap-1 border border-emerald-100">
+                    Tipo: {filterType}
+                    <X className="w-3 h-3 cursor-pointer" onClick={() => setFilterType(null)} />
+                 </span>
+               )}
+               {filterStatus && (
+                 <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase flex items-center gap-1 border border-emerald-100">
+                    Status: {filterStatus}
+                    <X className="w-3 h-3 cursor-pointer" onClick={() => setFilterStatus(null)} />
+                 </span>
+               )}
+             </div>
+          </div>
+        )}
+
         {error && (
           <div className="p-3 bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/30 rounded text-rose-600 text-xs font-medium flex justify-between items-center animate-in slide-in-from-top-2">
             <span>{error}</span>
@@ -167,9 +283,12 @@ export default function Transactions() {
 
         <Card className="border border-stone-200 dark:border-slate-800 shadow-sm overflow-hidden">
           <CardHeader className="border-b border-stone-50 dark:border-slate-800">
-            <div className="flex items-center gap-2">
-              <Receipt className="w-5 h-5 text-emerald-500" />
-              <CardTitle className="text-lg">Histórico de Movimentações</CardTitle>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-emerald-500" />
+                <CardTitle className="text-lg">Histórico de Movimentações</CardTitle>
+              </div>
+              {isLoading && <Loader2 className="w-4 h-4 animate-spin text-slate-300" />}
             </div>
           </CardHeader>
           <CardContent className="p-0 overflow-x-auto">
@@ -181,18 +300,19 @@ export default function Transactions() {
                   <TableHead className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400">Data</TableHead>
                   <TableHead className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400">Status</TableHead>
                   <TableHead className="px-6 py-4 text-right text-[11px] font-bold uppercase tracking-wider text-slate-400">Valor</TableHead>
+                  <TableHead className="px-6 py-4 text-right text-[11px] font-bold uppercase tracking-wider text-slate-400">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   Array.from({ length: 8 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={5} className="px-6 py-4"><div className="h-4 w-full bg-stone-50 dark:bg-slate-800/50 animate-pulse rounded" /></TableCell>
+                      <TableCell colSpan={6} className="px-6 py-4"><div className="h-4 w-full bg-stone-50 dark:bg-slate-800/50 animate-pulse rounded" /></TableCell>
                     </TableRow>
                   ))
                 ) : filteredTransactions.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-48 text-center text-slate-400">
+                    <TableCell colSpan={6} className="h-48 text-center text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Receipt className="w-8 h-8 opacity-20" />
                         <p className="text-sm">Nenhuma transação encontrada.</p>
@@ -224,6 +344,15 @@ export default function Transactions() {
                       <TableCell className={`px-6 py-4 text-right font-bold text-sm ${t.type === "INCOME" ? "text-emerald-600" : "text-slate-900 dark:text-slate-100"}`}>
                         {t.type === "INCOME" ? "+" : t.type === "EXPENSE" ? "-" : ""} 
                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Math.abs(t.amount))}
+                      </TableCell>
+                      <TableCell className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => handleDelete(t.id)}
+                          className="text-slate-300 hover:text-rose-500 transition-colors"
+                          title="Excluir transação"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </TableCell>
                     </TableRow>
                   ))

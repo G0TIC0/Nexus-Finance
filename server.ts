@@ -11,11 +11,11 @@ import { z } from "zod";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import cors from "cors";
-import fs from "fs/promises";
 import multer from "multer";
 
 // Configuração do multer para upload de arquivos (Avatar)
 const upload = multer({ 
+  storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 }
 });
 
@@ -31,9 +31,23 @@ if (JWT_SECRET.length < 32) {
 }
 
 // --- Block 2.1: PrismaClient Initialization ---
+// Forçamos o carregamento do .env para garantir que as URLs corretas sejam usadas
+const envConfig = dotenv.config({ override: true });
+if (envConfig.error) {
+  console.warn("[Config] Aviso: Não foi possível carregar o arquivo .env", envConfig.error);
+}
+
+const dbUrl = process.env.DATABASE_URL;
+if (dbUrl) {
+  const maskedUrl = dbUrl.replace(/:([^:@]+)@/, ':****@');
+  console.log(`[Database] Usando string de conexão: ${maskedUrl}`);
+} else {
+  console.error("[Database] ERRO: DATABASE_URL não definida!");
+}
+
 const prisma = new PrismaClient({
   datasources: {
-    db: { url: process.env.DATABASE_URL }
+    db: { url: dbUrl }
   },
   log: process.env.NODE_ENV === "development" ? ["query", "warn", "error"] : ["error"],
 });
@@ -123,18 +137,57 @@ export async function createApp() {
 
   // --- Auth Middleware ---
   const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const token = (req as any).cookies?.token;
-    if (!token) {
-      res.status(401).json({ error: "Não autorizado" });
-      return;
-    }
-
     try {
-      const decoded = jwt.verify(token, JWT_SECRET as string) as unknown as { userId: string };
-      (req as AuthRequest).userId = decoded.userId;
+      // Sempre garante a existência de um usuário padrão para o modo aberto
+      let defaultUser;
+      try {
+        defaultUser = await prisma.user.findFirst({
+          where: { email: "usuario@exemplo.com" }
+        });
+      } catch (dbErr) {
+        console.error("Database connection error during authentication:", dbErr);
+        res.status(503).json({ 
+          error: "Serviço de banco de dados indisponível no momento",
+          details: dbErr instanceof Error ? dbErr.message : String(dbErr)
+        });
+        return;
+      }
+
+      if (!defaultUser) {
+        try {
+          // Use upsert to safely handle concurrent creation requests
+          defaultUser = await prisma.user.upsert({
+            where: { email: "usuario@exemplo.com" },
+            update: {},
+            create: {
+              name: "Usuário Nexus",
+              email: "usuario@exemplo.com",
+              hashedPassword: await bcrypt.hash("nexus123", 12),
+              preferences: { theme: "light" }
+            }
+          });
+        } catch (createErr) {
+          // If upsert fails for some reason or we hit a race condition, try fetching one last time
+          defaultUser = await prisma.user.findFirst({
+            where: { email: "usuario@exemplo.com" }
+          });
+
+          if (!defaultUser) {
+            console.error("Error ensuring default user:", createErr);
+            res.status(503).json({ 
+              error: "Erro ao inicializar perfil de acesso automático",
+              details: createErr instanceof Error ? createErr.message : String(createErr)
+            });
+            return;
+          }
+        }
+      }
+
+      (req as AuthRequest).userId = defaultUser.id;
       next();
     } catch (err) {
-      res.status(401).json({ error: "Sessão inválida" });
+      console.error("Error ensuring default user:", err);
+      res.status(500).json({ error: "Erro ao inicializar sessão automática" });
     }
   };
 
@@ -156,7 +209,10 @@ export async function createApp() {
   app.post("/api/auth/register", registerRateLimiter, async (req: Request, res: Response) => {
     try {
       const result = registerSchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
+      if (!result.success) {
+        console.warn("Registration validation failed:", result.error.format());
+        return res.status(400).json({ error: result.error.issues[0].message });
+      }
       
       const { name, email, password } = result.data;
       const existingUser = await prisma.user.findUnique({ where: { email } });
@@ -171,15 +227,19 @@ export async function createApp() {
       setAuthCookie(res, token);
       
       res.json({ user: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } });
-    } catch (err: unknown) {
-      res.status(400).json({ error: "Falha ao registrar" });
+    } catch (err: any) {
+      console.error("Registration error details:", err);
+      res.status(400).json({ error: `Falha ao registrar: ${err.message || 'Erro de banco de dados'}` });
     }
   });
 
   app.post("/api/auth/login", loginRateLimiter, async (req: Request, res: Response) => {
     try {
       const result = loginSchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
+      if (!result.success) {
+        console.warn("Login validation failed:", result.error.format());
+        return res.status(400).json({ error: result.error.issues[0].message });
+      }
       
       const { email, password } = result.data;
       const user = await prisma.user.findUnique({ where: { email } });
@@ -197,10 +257,9 @@ export async function createApp() {
       setAuthCookie(res, token);
       
       res.json({ user: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Erro desconhecido";
-      await fs.appendFile("error.log", `Login error: ${message}\n`).catch(() => {});
-      res.status(500).json({ error: "Erro interno no servidor" });
+    } catch (err: any) {
+      console.error("Login error details:", err);
+      res.status(400).json({ error: `Erro no login: ${err.message || 'Erro de banco de dados'}` });
     }
   });
 
@@ -232,7 +291,15 @@ export async function createApp() {
         data: { ...(name && { name }), ...(avatarUrl && { avatarUrl }) },
       });
 
-      res.json({ user: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } });
+      res.json({ 
+        user: { 
+          id: user.id, 
+          name: user.name, 
+          email: user.email, 
+          avatarUrl: user.avatarUrl,
+          preferences: user.preferences
+        } 
+      });
     } catch (err: unknown) {
       res.status(400).json({ error: "Falha ao atualizar perfil" });
     }
@@ -252,9 +319,18 @@ export async function createApp() {
     try {
       const result = preferencesSchema.safeParse(req.body);
       if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
+      
+      const userId = (req as AuthRequest).userId;
+      const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+      
+      if (!currentUser) return res.status(404).json({ error: "Usuário não encontrado" });
+
+      const currentPrefs = (currentUser.preferences as any) || {};
+      const newPrefs = { ...currentPrefs, ...result.data };
+
       const user = await prisma.user.update({
-        where: { id: (req as AuthRequest).userId },
-        data: { preferences: result.data },
+        where: { id: userId },
+        data: { preferences: newPrefs },
       });
       res.json({ preferences: user.preferences });
     } catch (err: unknown) {
@@ -339,12 +415,12 @@ export async function createApp() {
 
   // --- Block 5.1: Paginated Transactions ---
   const createTransactionSchema = z.object({
-    description: z.string().min(1).max(255),
+    description: z.string().min(1, "Descrição é obrigatória").max(255),
     amount: z.number().positive("Valor deve ser positivo"),
     type: z.enum(["INCOME", "EXPENSE", "TRANSFER"]),
     status: z.enum(["REALIZED", "PROJECTED"]).default("REALIZED"),
-    competenceDate: z.string().datetime({ message: "Data de competência inválida" }),
-    categoryId: z.string().cuid().optional(),
+    competenceDate: z.string(), // Relaxed to allow various date formats, parsed manually
+    categoryId: z.string().cuid().optional().or(z.literal("")).transform(v => v === "" ? undefined : v),
   });
 
   app.get("/api/transactions", authenticate, async (req: Request, res: Response) => {
@@ -366,6 +442,7 @@ export async function createApp() {
 
       res.json({ data: transactions, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } });
     } catch (err) {
+      console.error("Error fetching transactions:", err);
       res.status(500).json({ error: "Erro ao buscar transações" });
     }
   });
@@ -373,14 +450,25 @@ export async function createApp() {
   app.post("/api/transactions", authenticate, async (req: Request, res: Response) => {
     try {
       const result = createTransactionSchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
+      if (!result.success) {
+        console.warn("Transaction validation failed:", result.error.format());
+        return res.status(400).json({ error: result.error.issues[0].message });
+      }
       
       const transaction = await prisma.transaction.create({
-        data: { ...result.data, competenceDate: new Date(result.data.competenceDate), userId: (req as AuthRequest).userId },
+        data: { 
+          ...result.data, 
+          competenceDate: new Date(result.data.competenceDate), 
+          userId: (req as AuthRequest).userId 
+        },
       });
       res.json({ success: true, data: transaction });
-    } catch (err: unknown) {
-      res.status(500).json({ error: "Falha ao criar transação" });
+    } catch (err: any) {
+      console.error("Error creating transaction:", err);
+      res.status(500).json({ 
+        error: "Falha ao criar transação", 
+        details: process.env.NODE_ENV === "development" ? err.message : undefined 
+      });
     }
   });
 
@@ -421,35 +509,76 @@ export async function createApp() {
   });
 
   const fixedExpenseSchema = z.object({
-    description: z.string().min(1).max(255),
-    amount: z.number().positive(),
+    description: z.string().min(1, "Descrição é obrigatória").max(255),
+    amount: z.number().positive("Valor deve ser positivo"),
     recurrence: z.enum(["DAILY", "WEEKLY", "MONTHLY", "ANNUAL"]),
-    nextDueDate: z.string().datetime(),
+    nextDueDate: z.string(), // Relaxed to allow various date strings, will parse to Date
     autoProvision: z.boolean().default(true),
-    categoryId: z.string().cuid().optional(),
+    categoryId: z.string().cuid().optional().or(z.literal("")).transform(v => v === "" ? undefined : v),
   });
 
   app.post("/api/fixed-expenses", authenticate, async (req: Request, res: Response) => {
     try {
       const result = fixedExpenseSchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json({ error: result.error.issues[0].message });
+      if (!result.success) {
+        console.warn("Fixed expense validation failed:", result.error.format());
+        return res.status(400).json({ error: result.error.issues[0].message });
+      }
       const expense = await prisma.fixedExpense.create({
-        data: { ...result.data, userId: (req as AuthRequest).userId, nextDueDate: new Date(result.data.nextDueDate) },
+        data: { 
+          ...result.data, 
+          userId: (req as AuthRequest).userId, 
+          nextDueDate: new Date(result.data.nextDueDate) 
+        },
       });
       res.json(expense);
-    } catch (err: unknown) {
-      res.status(500).json({ error: "Erro ao criar despesa fixa" });
+    } catch (err: any) {
+      console.error("Error creating fixed expense:", err);
+      res.status(500).json({ 
+        error: "Erro ao criar despesa fixa",
+        details: process.env.NODE_ENV === "development" ? err.message : undefined
+      });
     }
   });
 
   app.patch("/api/fixed-expenses/:id", authenticate, async (req: Request, res: Response) => {
     try {
-      const expense = await prisma.fixedExpense.findFirst({ where: { id: req.params.id, userId: (req as AuthRequest).userId } });
+      const userId = (req as AuthRequest).userId;
+      const expense = await prisma.fixedExpense.findFirst({
+        where: { id: req.params.id, userId }
+      });
       if (!expense) return res.status(404).json({ error: "Despesa fixa não encontrada" });
-      const updated = await prisma.fixedExpense.update({ where: { id: req.params.id }, data: { active: req.body.active } });
+
+      // If body has 'active' but nothing else from the schema, we can do a partial update
+      // Otherwise we validate against the schema (ignoring required if they aren't there? 
+      // Actually let's just make it a full update or partial based on what's provided)
+      
+      const partialSchema = fixedExpenseSchema.partial();
+      const result = partialSchema.safeParse(req.body);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error.issues[0].message });
+      }
+
+      const updateData: any = { ...result.data };
+      if (updateData.nextDueDate) {
+        updateData.nextDueDate = new Date(updateData.nextDueDate);
+      }
+      
+      // Specifically handle 'active' if provided separately or via parse
+      if (req.body.active !== undefined) {
+        updateData.active = Boolean(req.body.active);
+      }
+
+      const updated = await prisma.fixedExpense.update({
+        where: { id: req.params.id },
+        data: updateData,
+        include: { category: true }
+      });
       res.json(updated);
-    } catch (err: unknown) {
-      res.status(500).json({ error: "Erro ao atualizar" });
+    } catch (err: any) {
+      console.error("Update error:", err);
+      res.status(500).json({ error: "Erro ao atualizar despesa fixa" });
     }
   });
 
@@ -469,7 +598,10 @@ export async function createApp() {
         const today = new Date();
         today.setHours(23, 59, 59, 999);
 
-        while (currentDueDate <= today) {
+        let iterations = 0;
+        const MAX_ITERATIONS = 365; // Máximo de 1 ano de processamento retroativo
+        while (currentDueDate <= today && iterations < MAX_ITERATIONS) {
+          iterations++;
           const existing = await prisma.transaction.findFirst({
             where: {
               userId,
@@ -502,6 +634,10 @@ export async function createApp() {
           else break;
 
           currentDueDate = nextDate;
+        }
+
+        if (iterations >= MAX_ITERATIONS) {
+          console.warn(`[Engine] Limite de iterações atingido para despesa fixa ${expense.id}`);
         }
 
         await prisma.fixedExpense.update({
@@ -630,17 +766,25 @@ export async function createApp() {
     }
   });
 
-  // Avatar Upload Endpoint
   app.post("/api/auth/avatar", authenticate, upload.single("avatar"), async (req: Request, res: Response) => {
     try {
       if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
       
-      // Simulação de upload para storage externo (ex: Supabase) retornando URL estática para esta correção simplificada
-      // Em produção, aqui seria feita a chamada ao Supabase Storage.
-      const avatarUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${(req as AuthRequest).userId}`;
+      const userId = (req as AuthRequest).userId;
+      
+      // Converter para base64 data URL e salvar diretamente no banco
+      const mimeType = req.file.mimetype;
+      const base64 = req.file.buffer.toString("base64");
+      const avatarUrl = `data:${mimeType};base64,${base64}`;
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { avatarUrl },
+      });
       
       res.json({ avatarUrl });
     } catch (err) {
+      console.error("Avatar upload error:", err);
       res.status(500).json({ error: "Erro no upload do avatar" });
     }
   });
@@ -664,11 +808,19 @@ export async function createApp() {
   return app;
 }
 
-// Inicialização local
-const isServerRunningDirectly = process.argv[1]?.includes('server');
-if (isServerRunningDirectly) {
-  createApp().then(app => {
+// Inicialização do servidor
+const startServer = async () => {
+  try {
+    const app = await createApp();
     const PORT = Number(process.env.PORT) || 3000;
-    app.listen(PORT, "0.0.0.0", () => console.log(`Server local rodando em http://localhost:${PORT}`));
-  });
-}
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Server] Nexus Finance rodando em http://localhost:${PORT}`);
+      console.log(`[Environment] Modo: ${process.env.NODE_ENV || "development"}`);
+    });
+  } catch (err) {
+    console.error("[Server] Falha crítica ao iniciar:", err);
+    process.exit(1);
+  }
+};
+
+startServer();

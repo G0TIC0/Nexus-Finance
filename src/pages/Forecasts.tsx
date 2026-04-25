@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 interface Forecast {
   id: string;
   monthsAhead: number;
-  projectedBalance: string; // JSON string
+  projectedBalance: number[] | string; // Pode ser array ou string JSON
   confidence: "LOW" | "MEDIUM" | "HIGH";
   createdAt: string;
 }
@@ -28,6 +28,32 @@ export default function Forecasts() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const generateInsight = (f: Forecast) => {
+    const balances = (typeof f.projectedBalance === "string"
+      ? JSON.parse(f.projectedBalance)
+      : f.projectedBalance) as number[];
+
+    if (!balances || balances.length < 2) return "Histórico insuficiente para análise profunda.";
+
+    const trend = balances[balances.length - 1] - balances[0];
+    const isNegative = balances.some(b => b < 0);
+    const volatile = f.confidence === "LOW";
+
+    if (isNegative) {
+      return "⚠️ Atenção: Sua projeção atinge valores negativos nos próximos meses. Considere reduzir gastos discricionários imediatamente.";
+    }
+    if (trend < -500) {
+      return "📉 Tendência de queda: Seu saldo projetado está diminuindo significativamente. Verifique se há novos gastos fixos impactando seu fluxo.";
+    }
+    if (volatile) {
+      return "🔍 Volatilidade detectada: Seu padrão de gastos é irregular, o que reduz a precisão da IA. Recomendamos categorizar melhor suas transações.";
+    }
+    if (trend > 100) {
+      return "🚀 Excelente! Sua saúde financeira mostra crescimento sustentável. Ótimo momento para considerar novos investimentos.";
+    }
+    return "✅ Estabilidade: Suas finanças parecem equilibradas. Mantenha o planejamento de gastos fixos sob controle.";
   };
 
   useEffect(() => {
@@ -63,7 +89,9 @@ export default function Forecasts() {
               ) : (
                 <div className="divide-y divide-stone-50 dark:divide-slate-800">
                   {forecasts.map((f, idx) => {
-                    const balances = JSON.parse(f.projectedBalance) as number[];
+                    const balances = (typeof f.projectedBalance === "string"
+                ? JSON.parse(f.projectedBalance)
+                : f.projectedBalance) as number[];
                     return (
                       <div key={f.id} className="p-6 space-y-6">
                         <div className="flex items-center justify-between">
@@ -81,7 +109,7 @@ export default function Forecasts() {
                             f.confidence === "MEDIUM" ? "bg-amber-50 text-amber-600 border-amber-100" :
                             "bg-rose-50 text-rose-600 border-rose-100"
                           } text-[10px] font-bold uppercase tracking-wider`}>
-                            Confiança: {f.confidence}
+                            Confiança: {f.confidence === "HIGH" ? "Alta" : f.confidence === "MEDIUM" ? "Média" : "Baixa"}
                           </Badge>
                         </div>
 
@@ -117,9 +145,9 @@ export default function Forecasts() {
                     <Sparkles className="w-3 h-3 text-amber-500" />
                     Insight de Previsão
                   </p>
-                  <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                  <p className="text-xs text-slate-500 leading-relaxed font-semibold">
                     {forecasts.length > 0 
-                      ? "Com base no seu histórico atual, recomendamos manter uma reserva extra para o Mês 2 da projeção."
+                      ? generateInsight(forecasts[0])
                       : "Gere previsões para que nosso motor de IA possa fornecer insights sobre seu futuro financeiro."}
                   </p>
                 </div>

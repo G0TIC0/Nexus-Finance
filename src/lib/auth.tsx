@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     const data = await parseJsonResponse(res);
     if (!res.ok) throw new Error(data.error || "Erro desconhecido");
-    setUser(data.user);
+    setUser(prev => prev ? { ...prev, ...data.user } : data.user);
   };
 
   return (

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ListRestart, Plus, Settings2, Loader2, X, AlertCircle } from "lucide-react";
+import { ListRestart, Plus, Settings2, Loader2, X, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface FixedExpense {
@@ -28,7 +28,13 @@ export default function Planning() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ name: "", color: "#10b981" });
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  
   const [isSaving, setIsSaving] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<FixedExpense | null>(null);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     description: "",
     amount: 0,
@@ -40,6 +46,7 @@ export default function Planning() {
   const fetchData = async () => {
     try {
       setIsLoading(true);
+      setError(null);
       const [expRes, catRes] = await Promise.all([
         fetch("/api/fixed-expenses"),
         fetch("/api/categories")
@@ -49,7 +56,13 @@ export default function Planning() {
       if (catRes.ok) {
         const cats = await catRes.json();
         setCategories(cats);
-        if (cats.length > 0 && !formData.categoryId) setFormData(f => ({ ...f, categoryId: cats[0].id }));
+        // Only set default category if one isn't already selected
+        setFormData(prev => {
+          if (!prev.categoryId && cats.length > 0) {
+            return { ...prev, categoryId: cats[0].id };
+          }
+          return prev;
+        });
       }
     } catch (err) {
       setError("Falha ao carregar dados.");
@@ -62,21 +75,45 @@ export default function Planning() {
     fetchData();
   }, []);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaving(true);
+  const handleDeleteCategory = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir esta categoria?")) return;
     try {
-      const res = await fetch("/api/fixed-expenses", {
-        method: "POST",
+      const res = await fetch(`/api/categories/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Erro ao excluir categoria");
+      fetchData();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (formData.amount <= 0) {
+      setError("O valor deve ser positivo.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    try {
+      const url = editingExpense ? `/api/fixed-expenses/${editingExpense.id}` : "/api/fixed-expenses";
+      const method = editingExpense ? "PATCH" : "POST";
+
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...formData,
-          nextDueDate: new Date(formData.nextDueDate).toISOString()
+          nextDueDate: new Date(formData.nextDueDate + 'T12:00:00').toISOString()
         })
       });
-      if (!res.ok) throw new Error("Erro ao salvar");
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erro ao salvar");
       
       setIsModalOpen(false);
+      setEditingExpense(null);
       setFormData({
         description: "",
         amount: 0,
@@ -86,9 +123,36 @@ export default function Planning() {
       });
       fetchData();
     } catch (err: any) {
-      alert(err.message);
+      setError(err.message);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleEdit = (expense: FixedExpense) => {
+    setEditingExpense(expense);
+    setFormData({
+      description: expense.description,
+      amount: expense.amount,
+      recurrence: expense.recurrence,
+      nextDueDate: new Date(expense.nextDueDate).toISOString().split('T')[0],
+      categoryId: (expense as any).categoryId || ""
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir esta despesa fixa?")) return;
+    
+    setIsDeleting(id);
+    try {
+      const res = await fetch(`/api/fixed-expenses/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Erro ao excluir");
+      fetchData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsDeleting(null);
     }
   };
 
@@ -102,6 +166,26 @@ export default function Planning() {
       if (res.ok) fetchData();
     } catch (err) {
       console.error("Toggle failed");
+    }
+  };
+
+  const handleCreateCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingCategory(true);
+    try {
+      const res = await fetch("/api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(categoryForm),
+      });
+      if (!res.ok) throw new Error("Erro ao criar categoria");
+      setCategoryForm({ name: "", color: "#10b981" });
+      setIsCategoryModalOpen(false);
+      fetchData();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsSavingCategory(false);
     }
   };
 
@@ -145,9 +229,26 @@ export default function Planning() {
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: expense.category?.color || '#cbd5e1' }} />
                     <CardTitle className="text-sm font-semibold">{expense.description}</CardTitle>
                   </div>
-                  <button onClick={() => toggleStatus(expense)} className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${expense.active ? 'bg-emerald-50 text-emerald-600' : 'bg-stone-100 text-stone-500'}`}>
-                    {expense.active ? 'Ativo' : 'Pausado'}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={() => handleEdit(expense)} 
+                      className="p-1 hover:bg-stone-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-600 transition-colors"
+                      title="Editar"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(expense.id)} 
+                      disabled={isDeleting === expense.id}
+                      className="p-1 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded text-slate-400 hover:text-rose-600 transition-colors"
+                      title="Excluir"
+                    >
+                      {isDeleting === expense.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                    </button>
+                    <button onClick={() => toggleStatus(expense)} className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ml-1 ${expense.active ? 'bg-emerald-50 text-emerald-600' : 'bg-stone-100 text-stone-500'}`}>
+                      {expense.active ? 'Ativo' : 'Pausado'}
+                    </button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4 pt-2">
@@ -158,7 +259,7 @@ export default function Planning() {
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{expense.recurrence}</span>
                     </div>
                     <div className="pt-3 border-t border-stone-100 dark:border-slate-800 flex justify-between items-center text-[10px] text-slate-500 font-medium">
-                      <span>Póximo vencimento:</span>
+                      <span>Próximo vencimento:</span>
                       <span>{new Date(expense.nextDueDate).toLocaleDateString('pt-BR')}</span>
                     </div>
                   </div>
@@ -176,29 +277,86 @@ export default function Planning() {
           <CardContent>
             <div className="flex flex-wrap gap-2">
               {categories.map(cat => (
-                <div key={cat.id} className="flex items-center gap-2 px-3 py-1.5 border rounded-full bg-white dark:bg-slate-900 border-stone-100 dark:border-slate-800 text-xs font-semibold">
+                <div key={cat.id} className="group flex items-center gap-2 px-3 py-1.5 border rounded-full bg-white dark:bg-slate-900 border-stone-100 dark:border-slate-800 text-xs font-semibold hover:border-stone-300 transition-all">
                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
                   {cat.name}
+                  <button 
+                    onClick={() => handleDeleteCategory(cat.id)}
+                    className="ml-1 p-0.5 hover:bg-rose-50 dark:hover:bg-rose-900/40 rounded text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Excluir categoria"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
                 </div>
               ))}
-              <Button variant="ghost" size="sm" className="rounded-full text-[10px] font-bold text-slate-400">+ Nova Categoria</Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="rounded-full text-[10px] font-bold text-slate-400"
+                onClick={() => setIsCategoryModalOpen(true)}
+              >
+                + Nova Categoria
+              </Button>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* New Fixed Expense Modal */}
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-stone-200 dark:border-slate-800 shadow-xl w-full max-w-sm animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-stone-100 dark:border-slate-800">
+              <h2 className="text-base font-semibold">Nova Categoria</h2>
+              <button onClick={() => setIsCategoryModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateCategory} className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-400">Nome</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-3 py-2 border border-stone-200 dark:border-slate-800 rounded text-sm bg-transparent focus:ring-1 focus:ring-emerald-500 outline-none"
+                  value={categoryForm.name}
+                  onChange={e => setCategoryForm(f => ({ ...f, name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-400">Cor</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    className="w-10 h-10 rounded cursor-pointer border border-stone-200"
+                    value={categoryForm.color}
+                    onChange={e => setCategoryForm(f => ({ ...f, color: e.target.value }))}
+                  />
+                  <span className="text-sm text-slate-500">{categoryForm.color}</span>
+                </div>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <Button type="button" variant="ghost" onClick={() => setIsCategoryModalOpen(false)} className="flex-1">Cancelar</Button>
+                <Button type="submit" disabled={isSavingCategory} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
+                  {isSavingCategory ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : "Criar"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* New/Edit Fixed Expense Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-stone-200 dark:border-slate-800 shadow-xl w-full max-w-md animate-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-6 border-b border-stone-100 dark:border-slate-800">
-              <h2 className="text-base font-semibold">Novo Gasto Fixo</h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <h2 className="text-base font-semibold">{editingExpense ? "Editar Gasto Fixo" : "Novo Gasto Fixo"}</h2>
+              <button onClick={() => { setIsModalOpen(false); setEditingExpense(null); }} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
             
-            <form onSubmit={handleCreate} className="p-6 space-y-4">
+            <form onSubmit={handleSave} className="p-6 space-y-4">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase text-slate-400">Descrição</label>
                 <input 

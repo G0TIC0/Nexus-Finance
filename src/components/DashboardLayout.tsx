@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useNavigate, useLocation } from "react-router-dom";
 import { 
-  LogOut, LayoutDashboard, 
+  LayoutDashboard, 
   Receipt, Target, BarChart3, Settings, Sparkles, Loader2
 } from "lucide-react";
 
@@ -14,16 +14,21 @@ interface DashboardLayoutProps {
 }
 
 export default function DashboardLayout({ children, title }: DashboardLayoutProps) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState(false);
 
   const runEngines = async () => {
     setIsProcessing(true);
     try {
-      await fetch("/api/engine/process-fixed-expenses", { method: "POST" });
-      await fetch("/api/engine/generate-forecast", { method: "POST" });
-      window.location.reload(); // Simple way to refresh data for now
+      const fixedRes = await fetch("/api/engine/process-fixed-expenses", { method: "POST" });
+      const forecastRes = await fetch("/api/engine/generate-forecast", { method: "POST" });
+      
+      if (!fixedRes.ok || !forecastRes.ok) {
+        console.error("Engine execution had errors");
+      }
+      // Emitir evento customizado para que o Dashboard possa re-buscar os dados
+      window.dispatchEvent(new CustomEvent("nexus:engines-complete"));
     } catch (err) {
       console.error("Forecasting engine failed");
     } finally {
@@ -32,8 +37,8 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
   };
 
   return (
-    <div className="flex min-h-screen bg-stone-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
-      {/* Sidebar */}
+    <div className="flex min-h-screen bg-stone-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans pb-20 lg:pb-0">
+      {/* Sidebar (Desktop) */}
       <aside className="w-64 bg-white dark:bg-slate-900 border-r border-stone-200 dark:border-slate-800 flex flex-col p-6 hidden lg:flex fixed h-full">
         <div className="flex items-center gap-3 mb-10 cursor-pointer" onClick={() => navigate("/")}>
           <div className="w-8 h-8 bg-slate-900 dark:bg-slate-100 rounded-lg flex items-center justify-center text-white dark:text-slate-900 font-extrabold text-lg">N</div>
@@ -49,7 +54,6 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
             <NavItem icon={<Settings className="w-4 h-4" />} label="Configurações" to="/settings" />
           </ul>
 
-          {/* --- Block 2.3: Generate Forecasts Button --- */}
           <div className="mt-8 px-2">
             <Button 
               size="sm" 
@@ -62,21 +66,30 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
             </Button>
           </div>
         </nav>
-
-        <div className="pt-6 border-t border-stone-100 dark:border-slate-800">
-          <Button 
-            variant="ghost" 
-            className="w-full justify-start gap-3 text-slate-500 hover:text-rose-500 px-2" 
-            onClick={logout}
-          >
-            <LogOut className="w-4 h-4" />
-            Sair da conta
-          </Button>
-        </div>
       </aside>
 
+      {/* Bottom Navigation (Mobile) */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-stone-200 dark:border-slate-800 z-50 px-2 py-2">
+        <ul className="flex items-center justify-between max-w-md mx-auto">
+          <MobileNavItem icon={<LayoutDashboard className="w-5 h-5" />} label="Início" to="/" />
+          <MobileNavItem icon={<Receipt className="w-5 h-5" />} label="Trans." to="/transactions" />
+          <MobileNavItem icon={<Target className="w-5 h-5" />} label="Plan." to="/planning" />
+          <li className="flex flex-col items-center">
+            <button 
+              onClick={runEngines} 
+              disabled={isProcessing}
+              className="p-3 bg-emerald-600 rounded-full text-white shadow-lg active:scale-95 transition-transform -mt-8 border-4 border-stone-50 dark:border-slate-950"
+            >
+              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            </button>
+          </li>
+          <MobileNavItem icon={<BarChart3 className="w-5 h-5" />} label="Prev." to="/forecasts" />
+          <MobileNavItem icon={<Settings className="w-5 h-5" />} label="Config." to="/settings" />
+        </ul>
+      </nav>
+
       {/* Main Content */}
-      <main className="flex-1 flex flex-col p-8 gap-8 overflow-y-auto lg:ml-64">
+      <main className="flex-1 flex flex-col p-4 sm:p-8 gap-6 sm:gap-8 overflow-y-auto lg:ml-64">
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
@@ -106,6 +119,26 @@ export default function DashboardLayout({ children, title }: DashboardLayoutProp
         {children}
       </main>
     </div>
+  );
+}
+
+function MobileNavItem({ icon, label, to }: { icon: React.ReactNode; label: string; to: string }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const active = location.pathname === to;
+
+  return (
+    <li className="flex-1">
+      <button 
+        onClick={() => navigate(to)}
+        className={`w-full flex flex-col items-center justify-center gap-0.5 py-1 ${
+          active ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"
+        }`}
+      >
+        {icon}
+        <span className="text-[10px] font-bold tracking-tighter uppercase">{label}</span>
+      </button>
+    </li>
   );
 }
 
