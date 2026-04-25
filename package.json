@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "prisma generate && tsc -p tsconfig.server.json && vite build",
-    "start": "node dist/server.js",
+    "build": "prisma generate && vite build",
+    "vercel-build": "prisma generate && vite build",
+    "start": "tsx server.ts",
     "postinstall": "prisma generate",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

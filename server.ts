@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
 dotenv.config({ override: true });
-import { createServer as createViteServer } from "vite";
+// import { createServer as createViteServer } from "vite";
 import path from "path";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -455,10 +455,15 @@ export async function createApp() {
         return res.status(400).json({ error: result.error.issues[0].message });
       }
       
+      const compDate = new Date(result.data.competenceDate);
+      if (isNaN(compDate.getTime())) {
+        return res.status(400).json({ error: "Data de competência inválida" });
+      }
+      
       const transaction = await prisma.transaction.create({
         data: { 
           ...result.data, 
-          competenceDate: new Date(result.data.competenceDate), 
+          competenceDate: compDate, 
           userId: (req as AuthRequest).userId 
         },
       });
@@ -524,11 +529,16 @@ export async function createApp() {
         console.warn("Fixed expense validation failed:", result.error.format());
         return res.status(400).json({ error: result.error.issues[0].message });
       }
+      const dueDate = new Date(result.data.nextDueDate);
+      if (isNaN(dueDate.getTime())) {
+        return res.status(400).json({ error: "Data de vencimento inválida" });
+      }
+
       const expense = await prisma.fixedExpense.create({
         data: { 
           ...result.data, 
           userId: (req as AuthRequest).userId, 
-          nextDueDate: new Date(result.data.nextDueDate) 
+          nextDueDate: dueDate 
         },
       });
       res.json(expense);
@@ -796,13 +806,21 @@ export async function createApp() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
+    // Em produção ou na Vercel, servimos os arquivos estáticos da pasta 'dist'
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (_req: Request, res: Response) => res.sendFile(path.join(distPath, "index.html")));
+    // Wildcard route para suportar SPA (Single Page Application)
+    // Apenas se não estiver na Vercel, pois a Vercel usa vercel.json rewrites
+    if (!process.env.VERCEL) {
+      app.get("*", (_req: Request, res: Response) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
   }
 
   return app;
